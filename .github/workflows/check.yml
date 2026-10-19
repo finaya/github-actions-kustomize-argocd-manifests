@@ -23,7 +23,7 @@ jobs:
           fetch-depth: 0
       - name: Auth
         id: auth
-        uses: buildersbank/ops-actions-templates/.github/actions/github-app-auth@c454e3b70a371258c36ea3ed626273f514324a44
+        uses: finaya/ops-actions-templates/.github/actions/github-app-auth@c454e3b70a371258c36ea3ed626273f514324a44
         with:
           app-id: ${{ secrets.GH_APP_ID }}
           private-key: ${{ secrets.GH_APP_PRIVATE_KEY }}
