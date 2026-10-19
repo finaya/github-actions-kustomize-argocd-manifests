@@ -35,10 +35,10 @@ There are no outputs for this action
 
 ```yaml
       - name: Individual Kustomize step
-        uses: buildersbank/github-actions-kustomize-argocd-manifests@v1.3.0
+        uses: finaya/github-actions-kustomize-argocd-manifests@v1.3.0
         with:
           gitops-repo-name: 'corpx-gitops-manifest'
-          gitops-repo-url: 'github.com/buildersbank/corpx-gitops-manifest.git'
+          gitops-repo-url: 'github.com/finaya/corpx-gitops-manifest.git'
           gh_access_token: ${{ secrets.actor-access-token }}
           image_name: gcr.io/${{ secrets.gcp-project-id }}/bb-api-gateway
           app_id: bb-api-gateway
@@ -61,10 +61,10 @@ The action is **backward compatible**. Simply update your workflow to use the ne
 
 ```yaml
 # Before
-uses: buildersbank/github-actions-kustomize-argocd-manifests@v1.2.3
+uses: finaya/github-actions-kustomize-argocd-manifests@v1.2.3
 
 # After  
-uses: buildersbank/github-actions-kustomize-argocd-manifests@v1.3.0
+uses: finaya/github-actions-kustomize-argocd-manifests@v1.3.0
 ```
 
 ## How to send updates?
@@ -73,6 +73,6 @@ If you wants to update or make changes in module code you should use the **devel
 ```yaml
       # Example using this actions
       - name: Individual Kustomize Deploy
-        uses: buildersbank/github-actions-kustomize-argocd-manifests@develop
+        uses: finaya/github-actions-kustomize-argocd-manifests@develop
 ```
 After execute all tests you can open a pull request to the master branch. 
