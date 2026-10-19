@@ -181,6 +181,57 @@ commit_and_push() {
   commit_via_api "$branch" "$message"
 }
 
+# Reads the tag currently written in the overlay, in whichever of the two shapes the
+# manifest uses.
+current_overlay_tag() {
+  local overlay_dir="k8s/${APP_ID}/overlays/$1"
+  local app_file
+  # head -1: o overlay pode ter mais de um arquivo com o kind, e yq com dois caminhos
+  # devolveria dois valores para uma variavel que espera um
+  if app_file=$(grep -rl "kind: FinayaApplication" "$overlay_dir" 2>/dev/null | head -n1) && [ -n "$app_file" ]; then
+    yq -r '.spec.image.tag // ""' "$app_file"
+  elif [ -f "${overlay_dir}/kustomization.yaml" ]; then
+    yq -r '(.images[] | select(.name == "IMAGE") | .newTag) // ""' "${overlay_dir}/kustomization.yaml"
+  fi
+}
+
+# True when the tag already in the manifest DESCENDS from the one we are about to write:
+# what is deployed already contains this commit, so writing would roll the environment back.
+#
+# Why this exists: the deploy order is the order the BUILDS finish, not the order the commits
+# were made. Two PRs merged 16 seconds apart put the older commit in DEV, because its build
+# was the slower one and wrote last. Measured in this gitops repo on 2026-09-08:
+#
+#   21:10:58  Deploy fin-vehicle-financing-service to DEV - version 1e789d2   <- newer commit
+#   21:11:01  Deploy fin-vehicle-financing-service to DEV - version 71a1256   <- older, 3s later
+#
+# Nothing signals it: both builds are green, the commit message looks like any other, the pod
+# stays 1/1 healthy, and ArgoCD syncs what it is told. Nothing is broken - it is just old.
+#
+# Fails open on purpose: a comparison that cannot be answered keeps today's behaviour instead
+# of blocking a deploy on an API hiccup.
+manifest_is_newer_than_release() {
+  local current="$1"
+  if [ -z "$current" ] || [ "$current" = "null" ] || [ "$current" = "$RELEASE_VERSION" ]; then
+    return 1
+  fi
+
+  # As duas entram numa URL de API. Sao sha ou tag, entao a forma esperada e a de uma
+  # referencia git; qualquer outra coisa nao e comparavel e o fluxo segue como antes.
+  if ! printf '%s' "$current$RELEASE_VERSION" | grep -qE '^[A-Za-z0-9._/-]+$'; then
+    log_warn "Tag fora do formato esperado (${current} / ${RELEASE_VERSION}) - writing the tag as usual"
+    return 1
+  fi
+
+  local status
+  if ! status=$(gh api "repos/${GITHUB_REPOSITORY}/compare/${RELEASE_VERSION}...${current}" --jq '.status' 2>/dev/null); then
+    log_warn "Could not compare ${RELEASE_VERSION} with ${current} in ${GITHUB_REPOSITORY} - writing the tag as usual"
+    return 1
+  fi
+
+  [ "$status" = "ahead" ]
+}
+
 delete_remote_branch_if_exists() {
   local branch="$1"
 
@@ -199,11 +250,20 @@ if [[ "$GITOPS_BRANCH" == "develop" ]]; then
   log_header "Condition 1: Develop environment"
   clone_repo develop
 
-  log_step "Develop branch Kustomize step - DEV Overlay"
-  apply_kustomize dev
+  # DEV is the only environment written unattended - homolog and prod go through a PR, where a
+  # regression is at least visible to a human. Set GITOPS_ALLOW_TAG_ROLLBACK=true to write an
+  # older tag on purpose, which is what a rollback is.
+  DEV_CURRENT_TAG=$(current_overlay_tag dev)
+  if [ "${GITOPS_ALLOW_TAG_ROLLBACK:-false}" != "true" ] && manifest_is_newer_than_release "${DEV_CURRENT_TAG}"; then
+    log_warn "DEV already runs ${DEV_CURRENT_TAG}, which already contains ${RELEASE_VERSION}"
+    log_warn "Skipping the write: this build finished after a newer one and would roll DEV back"
+  else
+    log_step "Develop branch Kustomize step - DEV Overlay"
+    apply_kustomize dev
 
-  log_step "Git commit and push directly to develop"
-  commit_and_push develop "Deploy ${APP_ID} to DEV - version ${RELEASE_VERSION} by ${GITHUB_ACTOR}"
+    log_step "Git commit and push directly to develop"
+    commit_and_push develop "Deploy ${APP_ID} to DEV - version ${RELEASE_VERSION} by ${GITHUB_ACTOR}"
+  fi
 
   log_step "Merge develop into release branch via API"
   # gh api exits 0 for 201 (merged) and 204 (already up to date), non-zero for 409 (conflict)

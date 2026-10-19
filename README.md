@@ -55,6 +55,43 @@ There are no outputs for this action
    - Deployer information
    - Branch reference
 
+## The DEV tag is never rolled back
+
+The deploy order is the order the **builds finish**, not the order the commits were made. Two PRs
+merged seconds apart used to put the **older** commit in DEV, because its build was the slower one
+and wrote the tag last:
+
+```
+21:10:58  Deploy fin-vehicle-financing-service to DEV - version 1e789d2   <- newer commit
+21:11:01  Deploy fin-vehicle-financing-service to DEV - version 71a1256   <- older, 3s later
+```
+
+Nothing signalled it: both builds green, a commit message like any other, the pod healthy at `1/1`,
+ArgoCD syncing what it was told. Nothing was broken — DEV was simply running old code.
+
+Before writing, the action now reads the tag already in the overlay and asks the application
+repository how the two commits relate (`/compare/{new}...{current}`). If what is deployed already
+**contains** the commit being written, the write is skipped and the step says so. The comparison
+fails open: if it cannot be answered, the tag is written as before, so a GitHub hiccup never blocks
+a deploy.
+
+This applies to **DEV only** — it is the one environment written unattended. Homolog and production
+go through a pull request, where a human sees the version.
+
+| variable | default | what it does |
+|---|---|---|
+| `GITOPS_ALLOW_TAG_ROLLBACK` | `false` | `true` writes an older tag on purpose, which is what a rollback is |
+
+Para exercitar a guarda sem subir o action:
+
+```bash
+bash tests/tag-guard-test.sh entrypoint.sh
+```
+
+Ele injeta um `gh` de mentira e roda os casos sobre um `kustomization.yaml` de verdade. O
+caso que lê a tag precisa do `yq` no PATH — o mesmo binário que o `Dockerfile` instala; sem
+ele, esse caso é pulado e os demais rodam.
+
 ## Migration from previous version
 
 The action is **backward compatible**. Simply update your workflow to use the new version:
