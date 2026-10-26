@@ -8,6 +8,17 @@ IMAGE_NAME="$4"
 APP_ID="$5"
 GITHUB_ACTOR="$6"
 
+# Azure DevOps repos (format: dev.azure.com/org/project/_git/repo) have no GitHub API:
+# commit via plain git push and open PRs via the Azure DevOps REST API instead.
+if [[ "$GITOPS_REPO_URL" == dev.azure.com/* ]]; then
+  IS_AZURE_DEVOPS=true
+  AZURE_ORG=$(echo "$GITOPS_REPO_URL" | cut -d'/' -f2)
+  AZURE_PROJECT=$(echo "$GITOPS_REPO_URL" | cut -d'/' -f3)
+  AZURE_REPO=$(echo "$GITOPS_REPO_URL" | cut -d'/' -f5 | sed 's/\.git$//')
+else
+  IS_AZURE_DEVOPS=false
+fi
+
 # Extract owner and repo from URL (format: github.com/owner/repo)
 REPO_OWNER=$(echo "$GITOPS_REPO_URL" | cut -d'/' -f2)
 REPO_NAME=$(echo "$GITOPS_REPO_URL" | cut -d'/' -f3 | sed 's/\.git$//')
@@ -61,18 +72,48 @@ apply_kustomize() {
 
 create_pr() {
   local head="$1" base="$2" env_name="$3" env_display="$4"
-  if gh pr create --head "$head" --base "$base" \
-    -t "[${env_display}] Deploy ${APP_ID}" \
-    --body "**Microservice:** ${APP_ID}
+  local title="[${env_display}] Deploy ${APP_ID}"
+  local body="**Microservice:** ${APP_ID}
 **Environment:** ${env_name}
 **Deployed by:** ${GITHUB_ACTOR}
 **Branch:** ${head}
 **Release version:** ${RELEASE_VERSION}
 
-This PR updates only the ${APP_ID} microservice in the ${env_name,,} environment."; then
+This PR updates only the ${APP_ID} microservice in the ${env_name,,} environment."
+
+  if [[ "$IS_AZURE_DEVOPS" == "true" ]]; then
+    create_pr_azure "$head" "$base" "$title" "$body"
+    return 0
+  fi
+
+  if gh pr create --head "$head" --base "$base" -t "$title" --body "$body"; then
     log_step "PR created successfully"
   else
     log_warn "PR already exists or an error occurred, skipping..."
+  fi
+}
+
+create_pr_azure() {
+  local head="$1" base="$2" title="$3" body="$4"
+  local api_url="https://dev.azure.com/${AZURE_ORG}/${AZURE_PROJECT}/_apis/git/repositories/${AZURE_REPO}/pullrequests?api-version=7.1"
+  local payload http_code
+  payload=$(jq -n \
+    --arg source "refs/heads/${head}" \
+    --arg target "refs/heads/${base}" \
+    --arg title  "$title" \
+    --arg body   "$body" \
+    '{sourceRefName: $source, targetRefName: $target, title: $title, description: $body}')
+
+  http_code=$(curl -s -o /tmp/azure_pr_response.json -w '%{http_code}' \
+    -u ":${GH_ACCESS_TOKEN}" \
+    -H "Content-Type: application/json" \
+    -X POST "$api_url" -d "$payload") || http_code="000"
+
+  if [[ "$http_code" == "201" ]]; then
+    log_step "PR created successfully: $(jq -r '.pullRequestId' /tmp/azure_pr_response.json)"
+  else
+    log_warn "PR already exists or an error occurred (HTTP ${http_code}), skipping..."
+    jq -r '.message // empty' /tmp/azure_pr_response.json 2>/dev/null || true
   fi
 }
 
@@ -178,7 +219,33 @@ commit_and_push() {
     return 0
   fi
 
+  if [[ "$IS_AZURE_DEVOPS" == "true" ]]; then
+    git commit -m "$message"
+    git_push_with_retry "$branch"
+    return 0
+  fi
+
   commit_via_api "$branch" "$message"
+}
+
+git_push_with_retry() {
+  local branch="$1"
+  local max_attempts=3
+
+  for attempt in $(seq 1 "$max_attempts"); do
+    if git push origin "HEAD:refs/heads/${branch}"; then
+      log_step "Branch ${branch} updated on remote"
+      return 0
+    fi
+    if [ "$attempt" -lt "$max_attempts" ]; then
+      log_warn "Push to ${branch} failed (attempt ${attempt}/${max_attempts}). Retrying..."
+      sleep "$attempt"
+      git pull --rebase origin "$branch" || true
+    fi
+  done
+
+  log_error "Push to ${branch} failed after ${max_attempts} attempts"
+  return 1
 }
 
 delete_remote_branch_if_exists() {
@@ -205,17 +272,29 @@ if [[ "$GITOPS_BRANCH" == "develop" ]]; then
   log_step "Git commit and push directly to develop"
   commit_and_push develop "Deploy ${APP_ID} to DEV - version ${RELEASE_VERSION} by ${GITHUB_ACTOR}"
 
-  log_step "Merge develop into release branch via API"
-  # gh api exits 0 for 201 (merged) and 204 (already up to date), non-zero for 409 (conflict)
-  if ! gh api "repos/${REPO_OWNER}/${REPO_NAME}/merges" \
-    --silent \
-    -f base="release" \
-    -f head="develop" \
-    -f commit_message="Merge develop into release after deploying ${APP_ID} ${RELEASE_VERSION}"; then
-    log_error "Merge conflict between develop and release - manual resolution required"
-    exit 1
+  if [[ "$IS_AZURE_DEVOPS" == "true" ]]; then
+    log_step "Merge develop into release branch via git"
+    git fetch origin release
+    git checkout -B release origin/release
+    if ! git merge develop --no-edit -m "Merge develop into release after deploying ${APP_ID} ${RELEASE_VERSION}"; then
+      log_error "Merge conflict between develop and release - manual resolution required"
+      exit 1
+    fi
+    git_push_with_retry release
+    log_step "develop merged into release"
+  else
+    log_step "Merge develop into release branch via API"
+    # gh api exits 0 for 201 (merged) and 204 (already up to date), non-zero for 409 (conflict)
+    if ! gh api "repos/${REPO_OWNER}/${REPO_NAME}/merges" \
+      --silent \
+      -f base="release" \
+      -f head="develop" \
+      -f commit_message="Merge develop into release after deploying ${APP_ID} ${RELEASE_VERSION}"; then
+      log_error "Merge conflict between develop and release - manual resolution required"
+      exit 1
+    fi
+    log_step "develop merged into release"
   fi
-  log_step "develop merged into release"
 
 elif [[ "$GITOPS_BRANCH" == "homolog" ]] || [[ "$GITOPS_BRANCH" == "release" ]]; then
   BRANCH_NAME="deploy/homolog/${APP_ID}"
