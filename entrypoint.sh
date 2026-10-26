@@ -60,6 +60,13 @@ apply_kustomize() {
     yq -i '.spec.image.repository = "'"${IMAGE_NAME}"'" | .spec.image.tag = "'"${RELEASE_VERSION}"'"' "$app_file"
   else
     kustomize edit set image "IMAGE=${IMAGE_NAME}:${RELEASE_VERSION}"
+    # Azure DevOps overlays never carried these labels: `kustomize edit set label` writes
+    # commonLabels, which also changes the immutable Deployment spec.selector and blocks the sync.
+    if [[ "$IS_AZURE_DEVOPS" == "true" ]]; then
+      echo "Done!!"
+      cd "$REPO_ROOT"
+      return 0
+    fi
     yq -i 'del(.labels[] | select(.pairs."app.kubernetes.io/version")) | .labels += [{"pairs": {"app.kubernetes.io/version": "'"${RELEASE_VERSION}"'"}, "includeSelectors": false, "includeTemplates": true}]' kustomization.yaml
     kustomize edit set label "app.kubernetes.io/name:${APP_ID}"
     kustomize edit set label "app.kubernetes.io/managed-by:kustomize"
