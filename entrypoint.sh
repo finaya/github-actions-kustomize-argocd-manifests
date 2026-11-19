@@ -116,12 +116,22 @@ create_pr_azure() {
     -H "Content-Type: application/json" \
     -X POST "$api_url" -d "$payload") || http_code="000"
 
-  if [[ "$http_code" == "201" ]]; then
-    log_step "PR created successfully: $(jq -r '.pullRequestId' "${RUNNER_TEMP:-/tmp}/azure_pr_response.json")"
-  else
-    log_warn "PR already exists or an error occurred (HTTP ${http_code}), skipping..."
-    jq -r '.message // empty' "${RUNNER_TEMP:-/tmp}/azure_pr_response.json" 2>/dev/null || true
-  fi
+  # 409 é o "já existe um PR ativo para essas branches" (TF401179): segue. Qualquer outro status
+  # (token vencido, 5xx, 000 de rede) falha o step, senão o deploy ficava verde sem PR.
+  case "$http_code" in
+    201)
+      log_step "PR created successfully: $(jq -r '.pullRequestId' "${RUNNER_TEMP:-/tmp}/azure_pr_response.json")"
+      ;;
+    409)
+      log_warn "PR already exists (HTTP 409), skipping..."
+      jq -r '.message // empty' "${RUNNER_TEMP:-/tmp}/azure_pr_response.json" 2>/dev/null || true
+      ;;
+    *)
+      log_error "Failed to create PR on Azure DevOps (HTTP ${http_code})"
+      jq -r '.message // empty' "${RUNNER_TEMP:-/tmp}/azure_pr_response.json" 2>/dev/null || true
+      exit 1
+      ;;
+  esac
 }
 
 # Creates a verified commit via GitHub API (commits via API are automatically verified by GitHub Apps).
