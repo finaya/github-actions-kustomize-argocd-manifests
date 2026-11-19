@@ -10,17 +10,18 @@ on:
 permissions:
   contents: read
 
-# Roda a action deste checkout (./) nas duas arquiteturas do runner self-hosted contra um GitOps
+# Roda a action deste checkout (./) em x64 e arm64 contra um GitOps
 # falso (repo bare local + gh falso, ver tests/setup-fake-gitops.sh): nada é clonado nem escrito
-# em repo real.
+# em repo real. Runner hospedado: o repo é público, e o pool self-hosted finaya-shared não atende
+# repo público.
 jobs:
   test:
-    name: action (${{ matrix.arch }})
+    name: action (${{ matrix.runner }})
     strategy:
       fail-fast: false
       matrix:
-        arch: [arm64, x64]
-    runs-on: ["self-hosted", "linux", "${{ matrix.arch }}", "finaya-shared"]
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
     env:
       GITOPS_BRANCH: develop
       RELEASE_VERSION: abc1234
