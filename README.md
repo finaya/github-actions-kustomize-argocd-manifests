@@ -2,6 +2,8 @@
 
 GitHub action used kustomize applications manifests
 
+Composite action: roda o `entrypoint.sh` com o bash do runner, sem imagem Docker. O `install-tools.sh` baixa kustomize, yq e gh (versão e sha256 fixos no `action.yml`). Teste: `.github/workflows/test.yml`, contra um GitOps falso.
+
 ## ✨ New Feature: Individual PRs per Microservice
 
 This action now creates **individual Pull Requests for each microservice** instead of bundling multiple microservices in a single PR.

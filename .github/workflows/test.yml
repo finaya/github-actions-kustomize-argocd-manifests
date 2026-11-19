@@ -1,0 +1,78 @@
+name: Test
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Roda a action deste checkout (./) em x64 e arm64 contra um GitOps
+# falso (repo bare local + gh falso, ver tests/setup-fake-gitops.sh): nada é clonado nem escrito
+# em repo real. Runner hospedado: o repo é público, e o pool self-hosted finaya-shared não atende
+# repo público.
+jobs:
+  test:
+    name: action (${{ matrix.runner }})
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    env:
+      GITOPS_BRANCH: develop
+      RELEASE_VERSION: abc1234
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      # Instalação de verdade (inclusive o gh) num diretório à parte, para conferir downloads e sha256.
+      # Versões e checksums saem do próprio action.yml: não há cópia no teste para divergir.
+      - name: Instalação das ferramentas
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}/install-check
+        run: |
+          vars=$(grep -E '^ +(KUSTOMIZE|YQ|GH)_(VERSION|SHA256_[A-Z0-9]+): ' action.yml | sed -E 's/^ +//; s/: +/=/; s/"//g')
+          [ "$(echo "$vars" | wc -l)" -eq 9 ] || { echo "::error::esperava 9 variáveis de versão no action.yml"; echo "$vars"; exit 1; }
+          echo "$vars"
+          env $vars bash install-tools.sh
+
+      - name: create_pr_azure (curl falso)
+        run: tests/create-pr-azure.test.sh
+
+      # O gh falso vai no bin da action antes dela rodar: a instalação pula o gh que já existe.
+      - name: GitOps falso
+        run: |
+          tests/setup-fake-gitops.sh "$RUNNER_TEMP/fake" "$RUNNER_TEMP/kustomize-argocd-manifests/bin"
+          echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/fake/gitconfig" >> "$GITHUB_ENV"
+
+      - name: Action (kustomization)
+        uses: ./
+        with:
+          gitops-repo-name: gitops
+          gitops-repo-url: github.com/fake/gitops.git
+          gh_access_token: test-token
+          image_name: registry.example/kustom-app
+          app_id: kustom-app
+          github_actor: tester
+
+      - name: Conferir (kustomization)
+        run: tests/check-develop.sh "$RUNNER_TEMP/fake" kustom-app kustomize
+
+      - name: Limpar o clone
+        run: rm -rf gitops "$RUNNER_TEMP/fake/graphql-payload.json" "$RUNNER_TEMP/fake/gh-calls.log"
+
+      - name: Action (FinayaApplication)
+        uses: ./
+        with:
+          gitops-repo-name: gitops
+          gitops-repo-url: github.com/fake/gitops.git
+          gh_access_token: test-token
+          image_name: registry.example/finaya-app
+          app_id: finaya-app
+          github_actor: tester
+
+      - name: Conferir (FinayaApplication)
+        run: tests/check-develop.sh "$RUNNER_TEMP/fake" finaya-app finaya

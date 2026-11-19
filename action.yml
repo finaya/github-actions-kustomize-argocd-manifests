@@ -25,13 +25,36 @@ inputs:
     description: "The github commit actor ID"
     required: true
 
+# Composite, não Docker: a action Docker fazia o build da imagem (FROM alpine, do Docker Hub) no
+# "Set up job", antes de qualquer step e sem login, e no runner self-hosted o pull anônimo pelo IP
+# compartilhado toma 429. Mesmas ferramentas do antigo Dockerfile, com versão e sha256 fixos.
 runs:
-  using: "docker"
-  image: "Dockerfile"
-  args:
-    - ${{ inputs.gitops-repo-name }}
-    - ${{ inputs.gitops-repo-url }}
-    - ${{ inputs.gh_access_token }}
-    - ${{ inputs.image_name }}
-    - ${{ inputs.app_id }}
-    - ${{ inputs.github_actor }}
+  using: composite
+  steps:
+    - name: Instalar kustomize, yq e gh
+      shell: bash
+      env:
+        KUSTOMIZE_VERSION: "5.3.0"
+        KUSTOMIZE_SHA256_AMD64: 3ab32f92360d752a2a53e56be073b649abc1e7351b912c0fb32b960d1def854c
+        KUSTOMIZE_SHA256_ARM64: a1ec622d4adeb483e3cdabd70f0d66058b1e4bcec013c4f74f370666e1e045d8
+        YQ_VERSION: "4.54.3"
+        YQ_SHA256_AMD64: 129534601871538efe0ba4c5e62a34fb1d5f469bcb975c4fddeb467d82974973
+        YQ_SHA256_ARM64: 89f69310b61b68d1245065a1241d1fc843f7a36cd6103ffd77ad987613bd1b67
+        GH_VERSION: "2.62.0"
+        GH_SHA256_AMD64: 41c8b0698ad3003cb5c44bde672a1ffd5f818595abd80162fbf8cc999418446a
+        GH_SHA256_ARM64: a165413209aab98bfb1db9629b97bc9c59778d38bb7378a33a0363cf822e7965
+      run: bash "$GITHUB_ACTION_PATH/install-tools.sh"
+
+    - name: Kustomize
+      shell: bash
+      env:
+        GITOPS_REPO_NAME: ${{ inputs.gitops-repo-name }}
+        GITOPS_REPO_URL: ${{ inputs.gitops-repo-url }}
+        GH_ACCESS_TOKEN: ${{ inputs.gh_access_token }}
+        IMAGE_NAME: ${{ inputs.image_name }}
+        APP_ID: ${{ inputs.app_id }}
+        ACTOR: ${{ inputs.github_actor }}
+      run: |
+        PATH="${RUNNER_TEMP}/kustomize-argocd-manifests/bin:${PATH}" \
+          bash "$GITHUB_ACTION_PATH/entrypoint.sh" \
+          "$GITOPS_REPO_NAME" "$GITOPS_REPO_URL" "$GH_ACCESS_TOKEN" "$IMAGE_NAME" "$APP_ID" "$ACTOR"
