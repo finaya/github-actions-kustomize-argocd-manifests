@@ -1,0 +1,80 @@
+name: Test
+
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# Roda a action deste checkout (./) nas duas arquiteturas do runner self-hosted contra um GitOps
+# falso (repo bare local + gh falso, ver tests/setup-fake-gitops.sh): nada é clonado nem escrito
+# em repo real.
+jobs:
+  test:
+    name: action (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, x64]
+    runs-on: ["self-hosted", "linux", "${{ matrix.arch }}", "finaya-shared"]
+    env:
+      GITOPS_BRANCH: develop
+      RELEASE_VERSION: abc1234
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      # Instalação de verdade (inclusive o gh) num diretório à parte, para conferir downloads e sha256.
+      - name: Instalação das ferramentas
+        env:
+          RUNNER_TEMP: ${{ runner.temp }}/install-check
+          KUSTOMIZE_VERSION: "5.3.0"
+          KUSTOMIZE_SHA256_AMD64: 3ab32f92360d752a2a53e56be073b649abc1e7351b912c0fb32b960d1def854c
+          KUSTOMIZE_SHA256_ARM64: a1ec622d4adeb483e3cdabd70f0d66058b1e4bcec013c4f74f370666e1e045d8
+          YQ_VERSION: "4.54.3"
+          YQ_SHA256_AMD64: 129534601871538efe0ba4c5e62a34fb1d5f469bcb975c4fddeb467d82974973
+          YQ_SHA256_ARM64: 89f69310b61b68d1245065a1241d1fc843f7a36cd6103ffd77ad987613bd1b67
+          GH_VERSION: "2.62.0"
+          GH_SHA256_AMD64: 41c8b0698ad3003cb5c44bde672a1ffd5f818595abd80162fbf8cc999418446a
+          GH_SHA256_ARM64: a165413209aab98bfb1db9629b97bc9c59778d38bb7378a33a0363cf822e7965
+        run: |
+          bash install-tools.sh
+          grep -q 'KUSTOMIZE_VERSION: "5.3.0"' action.yml || { echo "::error::versões do teste e do action.yml divergem"; exit 1; }
+
+      # O gh falso vai no bin da action antes dela rodar: a instalação pula o gh que já existe.
+      - name: GitOps falso
+        run: |
+          tests/setup-fake-gitops.sh "$RUNNER_TEMP/fake" "$RUNNER_TEMP/kustomize-argocd-manifests/bin"
+          echo "GIT_CONFIG_GLOBAL=$RUNNER_TEMP/fake/gitconfig" >> "$GITHUB_ENV"
+
+      - name: Action (kustomization)
+        uses: ./
+        with:
+          gitops-repo-name: gitops
+          gitops-repo-url: github.com/fake/gitops.git
+          gh_access_token: test-token
+          image_name: registry.example/kustom-app
+          app_id: kustom-app
+          github_actor: tester
+
+      - name: Conferir (kustomization)
+        run: tests/check-develop.sh "$RUNNER_TEMP/fake" kustom-app kustomize
+
+      - name: Limpar o clone
+        run: rm -rf gitops "$RUNNER_TEMP/fake/graphql-payload.json" "$RUNNER_TEMP/fake/gh-calls.log"
+
+      - name: Action (FinayaApplication)
+        uses: ./
+        with:
+          gitops-repo-name: gitops
+          gitops-repo-url: github.com/fake/gitops.git
+          gh_access_token: test-token
+          image_name: registry.example/finaya-app
+          app_id: finaya-app
+          github_actor: tester
+
+      - name: Conferir (FinayaApplication)
+        run: tests/check-develop.sh "$RUNNER_TEMP/fake" finaya-app finaya

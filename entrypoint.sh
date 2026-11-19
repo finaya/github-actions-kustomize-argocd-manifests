@@ -111,16 +111,16 @@ create_pr_azure() {
     --arg body   "$body" \
     '{sourceRefName: $source, targetRefName: $target, title: $title, description: $body}')
 
-  http_code=$(curl -s -o /tmp/azure_pr_response.json -w '%{http_code}' \
+  http_code=$(curl -s -o "${RUNNER_TEMP:-/tmp}/azure_pr_response.json" -w '%{http_code}' \
     -u ":${GH_ACCESS_TOKEN}" \
     -H "Content-Type: application/json" \
     -X POST "$api_url" -d "$payload") || http_code="000"
 
   if [[ "$http_code" == "201" ]]; then
-    log_step "PR created successfully: $(jq -r '.pullRequestId' /tmp/azure_pr_response.json)"
+    log_step "PR created successfully: $(jq -r '.pullRequestId' "${RUNNER_TEMP:-/tmp}/azure_pr_response.json")"
   else
     log_warn "PR already exists or an error occurred (HTTP ${http_code}), skipping..."
-    jq -r '.message // empty' /tmp/azure_pr_response.json 2>/dev/null || true
+    jq -r '.message // empty' "${RUNNER_TEMP:-/tmp}/azure_pr_response.json" 2>/dev/null || true
   fi
 }
 
