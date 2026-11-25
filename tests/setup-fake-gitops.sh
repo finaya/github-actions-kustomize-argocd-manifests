@@ -38,6 +38,21 @@ spec:
     repository: registry.example/old
     tag: old
 YAML
+# Overlay do operator com o label de versão (padrão dos repos migrados): a action deve atualizá-lo.
+cat > "$src/k8s/finaya-app/overlays/dev/kustomization.yaml" <<'YAML'
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - app.yaml
+labels:
+  - includeSelectors: false
+    pairs:
+      app.kubernetes.io/name: finaya-app
+  - includeSelectors: false
+    includeTemplates: true
+    pairs:
+      app.kubernetes.io/version: old
+YAML
 git -C "$src" add -A
 git -C "$src" commit -qm fixture
 git clone -q --bare "$src" "$work/gitops.git"
