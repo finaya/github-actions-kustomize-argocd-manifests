@@ -24,9 +24,15 @@ if [ "$kind" = kustomize ]; then
   grep -q "app.kubernetes.io/name: $app" <<<"$content" && ok "label name" || bad "label name"
   grep -q "finaya.tech/origin:" <<<"$content" && ok "annotation origin" || bad "annotation origin"
 else
-  [ "$path" = "k8s/$app/overlays/dev/app.yaml" ] && ok "arquivo alterado" || bad "arquivo: $path"
-  grep -q "repository: registry.example/$app" <<<"$content" && ok "repository" || bad "repository"
-  grep -q "tag: $RELEASE_VERSION" <<<"$content" && ok "tag" || bad "tag"
+  # O commit pode trazer mais de um arquivo (app.yaml e kustomization.yaml): conferir cada um pelo path.
+  file_of() { jq -r --arg p "$1" '.variables.input.fileChanges.additions[] | select(.path == $p) | .contents' "$payload" | base64 -d; }
+  app_content=$(file_of "k8s/$app/overlays/dev/app.yaml")
+  [ -n "$app_content" ] && ok "app.yaml alterado" || bad "app.yaml não está no commit"
+  grep -q "repository: registry.example/$app" <<<"$app_content" && ok "repository" || bad "repository"
+  grep -q "tag: $RELEASE_VERSION" <<<"$app_content" && ok "tag" || bad "tag"
+  kus_content=$(file_of "k8s/$app/overlays/dev/kustomization.yaml")
+  grep -q "app.kubernetes.io/version: $RELEASE_VERSION" <<<"$kus_content" && ok "label version" || bad "label version"
+  grep -q "app.kubernetes.io/name: $app" <<<"$kus_content" && ok "label name preservado" || bad "label name"
 fi
 
 grep -q "api repos/fake/gitops/merges" "$work/gh-calls.log" && ok "merge develop -> release" || bad "merge não chamado"

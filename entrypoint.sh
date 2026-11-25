@@ -58,6 +58,11 @@ apply_kustomize() {
     local app_file
     app_file=$(grep -rl "kind: FinayaApplication" .)
     yq -i '.spec.image.repository = "'"${IMAGE_NAME}"'" | .spec.image.tag = "'"${RELEASE_VERSION}"'"' "$app_file"
+    # Keeps the app.kubernetes.io/version label of the overlay in sync with spec.image.tag. Only an
+    # existing `labels` entry is touched (includeSelectors: false), so no Deployment selector changes.
+    if [ -f kustomization.yaml ] && yq -e '.labels[] | select(.pairs."app.kubernetes.io/version")' kustomization.yaml >/dev/null 2>&1; then
+      yq -i '(.labels[] | select(.pairs."app.kubernetes.io/version") | .pairs."app.kubernetes.io/version") = "'"${RELEASE_VERSION}"'"' kustomization.yaml
+    fi
   else
     kustomize edit set image "IMAGE=${IMAGE_NAME}:${RELEASE_VERSION}"
     # Azure DevOps overlays never carried these labels: `kustomize edit set label` writes
